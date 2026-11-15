@@ -151,9 +151,9 @@ def setup():
     base = info["upstream_revision"]
     # Do not let `submodule update` detach or move an existing developer checkout.
     if not available():
-        git("submodule", "update", "--init", "--filter=blob:none", "--", "third_party/llvm")
+        git("submodule", "update", "--init", "--depth=1", "--filter=blob:none", "--", "third_party/llvm")
     if git("cat-file", "-e", base + "^{commit}", sub=True, check=False).returncode:
-        git("fetch", "--no-tags", "--filter=blob:none", "origin", base, sub=True)
+        git("fetch", "--no-tags", "--depth=1", "--filter=blob:none", "origin", base, sub=True)
     head = out("rev-parse", "HEAD", sub=True)
     path = state_path()
     previous = json.loads(path.read_text()) if path.exists() else None
