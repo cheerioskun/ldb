@@ -98,14 +98,13 @@ void *__ldb_thread_start(void *arg) {
   setup_canary();
 
   // initialize stack
-  char *rbp = get_fs_rbp(); // this is the rbp of thread main
+  char *rbp = get_rbp(); // root frame of this interposed thread entry
 
   // set ngen to 0
   *((uint64_t *)(rbp + 16)) = 0;
   // set canary and tag
   *((uint64_t *)(rbp + 8)) = (uint64_t)LDB_CANARY << 32;
-  // set old RBP
-  *((uint64_t *)rbp) = 0;
+  // Preserve the native pthread caller's saved RBP for its return path.
 
   char *fsbase = rdfsbase();
 

@@ -75,6 +75,9 @@ static int scan_stack(struct thread *th, uint64_t *rbp, struct stack_sample *sar
       return -1;
     }
 
+    // The caller above this root belongs to libc and uses the native frame ABI.
+    if (rbp == th->stack_base)
+      break;
     rbp = (uint64_t *)*rbp;
   }
 

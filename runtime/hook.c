@@ -20,7 +20,7 @@ void __ldbInit(void) {
 
   *((uint64_t *)(rbp + 16)) = 0;
   *((uint64_t *)(rbp + 8)) = (uint64_t)LDB_CANARY << 32;
-  *((uint64_t *)rbp) = 0;
+  // Preserve the native caller's saved RBP. The monitor stops at stackbase.
 
   // attach shared memory
   int shmid = shmget(SHM_KEY, sizeof(ldb_shmseg), 0666 | IPC_CREAT);
