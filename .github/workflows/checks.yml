@@ -46,6 +46,17 @@ jobs:
           ./scripts/build-llvm.sh -DLLVM_USE_LINKER=lld
           -DCMAKE_CXX_FLAGS_RELEASE="-O1 -DNDEBUG"
           -DCMAKE_C_FLAGS_RELEASE="-O1 -DNDEBUG"
+      - name: Package compiler tools for reproduction on other x86-64 hosts
+        run: |
+          cp licenses/LLVM.txt build/llvm/LLVM-LICENSE.txt
+          cd build/llvm
+          tar -czf ../llvm-tools.tar.gz bin/clang* bin/llvm-symbolizer lib/clang LLVM-LICENSE.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: llvm-tools-${{ github.sha }}
+          path: build/llvm-tools.tar.gz
+          retention-days: 1
+          compression-level: 0
       - name: Build the runtime
         run: make -C runtime
       - name: Run the three behavior contracts
