@@ -1,4 +1,4 @@
-.PHONY: all setup compiler runtime check-patches test-tooling
+.PHONY: all setup compiler runtime check-patches test-tooling test-behavior
 
 all: runtime
 
@@ -16,3 +16,7 @@ check-patches:
 
 test-tooling:
 	python3 -m unittest discover -s tests/tooling -v
+
+# Uses an already built compiler/runtime; does not hide a rebuild in a test run.
+test-behavior:
+	python3 tests/behavior/run.py
