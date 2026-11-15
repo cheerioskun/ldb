@@ -11,6 +11,7 @@ import struct
 import subprocess
 import tempfile
 import time
+import traceback
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -121,7 +122,8 @@ def runtime_test(args, out):
             process.stdin.write("x")
             process.stdin.flush()
             process.communicate(timeout=args.timeout)
-            assert process.returncode == 0, log_path.read_text()
+            if process.returncode:
+                raise RuntimeError(f"Runtime exited with status {process.returncode}\n{log_path.read_text()}")
         records = events(event_path)
         assert event_path.stat().st_size % EVENT.size == 0, "Truncated event record"
         assert all(1 <= r[0] <= 12 and r[2] < 10**9 and r[3] > 0 for r in records)
@@ -157,8 +159,12 @@ def main():
     out = Path(tempfile.mkdtemp(prefix="run-", dir=args.output))
     print(f"Artifacts: {out}", flush=True)
     (out / "toolchain.txt").write_text(run([args.clang, "--version"]) + run([args.host_cc, "--version"]))
-    compiler_tests(args, out)
-    runtime_test(args, out)
+    try:
+        compiler_tests(args, out)
+        runtime_test(args, out)
+    except Exception:
+        (out / "failure.txt").write_text(traceback.format_exc())
+        raise
     print("PASS all 3 behavior contracts", flush=True)
 
 
