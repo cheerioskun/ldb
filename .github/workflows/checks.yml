@@ -28,3 +28,32 @@ jobs:
           python3 scripts/llvm.py hook
           git diff --exit-code -- patches/llvm
           git diff --cached --exit-code -- patches/llvm third_party/llvm
+
+  behavior:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      CC: gcc
+      CXX: g++
+      LDB_BUILD_JOBS: 3
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install build tools
+        run: sudo apt-get update -qq && sudo apt-get install -y ninja-build lld
+      - name: Build the patched compiler
+        # Host optimization affects build time, not the fixtures' -O3 setting.
+        run: >-
+          ./scripts/build-llvm.sh -DLLVM_USE_LINKER=lld
+          -DCMAKE_CXX_FLAGS_RELEASE="-O1 -DNDEBUG"
+          -DCMAKE_C_FLAGS_RELEASE="-O1 -DNDEBUG"
+      - name: Build the runtime
+        run: make -C runtime
+      - name: Run the three behavior contracts
+        run: make test-behavior
+      - name: Retain test artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: behavior-${{ github.sha }}
+          path: build/behavior/
+          retention-days: 7
