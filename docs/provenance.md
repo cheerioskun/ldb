@@ -24,10 +24,11 @@ reference. Build recipes/docs are adjusted where necessary for the new runtime,
 compiler, and analysis locations. These inherited analysis/dashboard tools have
 not been modernized or validated by the tooling tests.
 
-Original author information and upstream commit messages are retained in the
-imported compiler patch descriptions. The upstream LLVM license is preserved
-in `licenses/LLVM.txt` and in the submodule. This reorganization does not claim
-to relicense imported LDB code.
+The compiler patches credit the original author and identify the exact source
+revision. Their import commits are new; the full original development history
+remains in the source fork. The upstream LLVM license is preserved in
+`licenses/LLVM.txt` and in the submodule. This reorganization does not claim to
+relicense imported LDB code.
 
 The baseline source's FS-base syscall change removes the original FSGSBASE
 instruction dependency. Building/running LDB and establishing its behavior
