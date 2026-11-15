@@ -1,4 +1,7 @@
 #pragma once
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include <inttypes.h>
 #include <unistd.h>
 #include <pthread.h>
@@ -68,6 +71,7 @@ typedef struct {
   pid_t id;
   char **fsbase;
   char *stackbase;
+  char *stackbottom;
   ldb_event_buffer_t *ebuf;
   struct timespec ts_wait;
   struct timespec ts_lock;
@@ -139,6 +143,23 @@ inline __attribute__((always_inline)) char *rdfsbase() {
   }
 
   return (char *)fsbase;
+}
+
+// Address-space randomization does not guarantee any particular stack prefix.
+inline __attribute__((always_inline)) char *get_stack_bottom() {
+  pthread_attr_t attr;
+  void *bottom = NULL;
+  size_t size;
+  int error = pthread_getattr_np(pthread_self(), &attr);
+  if (!error) {
+    error = pthread_attr_getstack(&attr, &bottom, &size);
+    pthread_attr_destroy(&attr);
+  }
+  if (error) {
+    fprintf(stderr, "LDB: pthread stack bounds: %s\n", strerror(error));
+    abort();
+  }
+  return (char *)bottom;
 }
 
 inline __attribute__((always_inline)) void setup_canary() {

@@ -40,6 +40,7 @@ struct thread {
   int cnt;
   uint64_t last_gen;
   uint64_t *stack_base;
+  uint64_t *stack_bottom;
   struct timespec last_ts; 
   struct tls_shared_region *tls;
   struct stack_sample samples[LDB_MAX_CALLDEPTH];
@@ -49,8 +50,8 @@ static int scan_stack(struct thread *th, uint64_t *rbp, struct stack_sample *sar
   uint64_t *top = rbp - 1;
   int frames = 0;
 
-  // Heuristic: If start rbp is not valid, skip this iteration
-  if (rbp <= (uint64_t *)0x7f0000000000 || rbp > th->stack_base)
+  // Validate against this thread's actual stack allocation and recorded root.
+  if (rbp < th->stack_bottom || rbp > th->stack_base)
     return -1;
 
   while (rbp) {
@@ -194,6 +195,7 @@ void *monitor_main(void *arg) {
       uint64_t *tmp = (uint64_t *)ldb_shared->ldb_thread_infos[i].fsbase;
       th->tls = (struct tls_shared_region *)(tmp - 43);
       th->stack_base = (uint64_t *)ldb_shared->ldb_thread_infos[i].stackbase;
+      th->stack_bottom = (uint64_t *)ldb_shared->ldb_thread_infos[i].stackbottom;
 
       // scan the thread's stack
       scan_thread(th);

@@ -42,6 +42,7 @@ void __ldbInit(void) {
   ldb_shared->ldb_thread_infos[0].id = syscall(SYS_gettid);
   ldb_shared->ldb_thread_infos[0].fsbase = (char **)(rdfsbase());
   ldb_shared->ldb_thread_infos[0].stackbase = rbp;
+  ldb_shared->ldb_thread_infos[0].stackbottom = get_stack_bottom();
   ldb_shared->ldb_thread_infos[0].ebuf = ebuf;
   ldb_shared->ldb_thread_infos[0].ts_wait = now;
   ldb_shared->ldb_thread_infos[0].ts_lock = now;

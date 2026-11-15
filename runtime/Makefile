@@ -8,6 +8,9 @@ LDB_CFLAGS = -O3 -g -fdebug-default-version=3 -fno-omit-frame-pointer -I./includ
 
 all: libshim.so libldb.a
 
+# Shared layout and compiler changes must rebuild every runtime object.
+hook.o logger.o monitor.o event.o tag.o shim.o: common.h $(CC)
+
 libldb.a: hook.o logger.o monitor.o event.o tag.o
 	$(AR) rcs $@ $^
 

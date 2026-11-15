@@ -107,6 +107,7 @@ void *__ldb_thread_start(void *arg) {
   // Preserve the native pthread caller's saved RBP for its return path.
 
   char *fsbase = rdfsbase();
+  char *stackbottom = get_stack_bottom();
 
   printf("New interposed thread is starting... thread ID = %ld\n", syscall(SYS_gettid));
   printf("ngen = %lu, tls rbp = %p, real rbp = %p, tls = %p - %p\n", get_ngen(), get_fs_rbp(), get_rbp(), (void *)(fsbase-200), (void *)fsbase);
@@ -134,6 +135,7 @@ void *__ldb_thread_start(void *arg) {
   ldb_shared->ldb_thread_infos[tidx].id = id;
   ldb_shared->ldb_thread_infos[tidx].fsbase = (char **)fsbase;
   ldb_shared->ldb_thread_infos[tidx].stackbase = rbp;
+  ldb_shared->ldb_thread_infos[tidx].stackbottom = stackbottom;
   ldb_shared->ldb_thread_infos[tidx].ebuf = ebuf;
   pthread_spin_unlock(&(ldb_shared->ldb_tlock));
 
