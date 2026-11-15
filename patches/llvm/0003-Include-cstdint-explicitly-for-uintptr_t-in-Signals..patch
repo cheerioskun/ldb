@@ -1,0 +1,21 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hemant Pandey <29029002+cheerioskun@users.noreply.github.com>
+Date: Sun, 15 Nov 2026 13:41:31 -0500
+Subject: [PATCH 3/3] Include cstdint explicitly for uintptr_t in Signals.h
+
+---
+ llvm/include/llvm/Support/Signals.h | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/llvm/include/llvm/Support/Signals.h b/llvm/include/llvm/Support/Signals.h
+index 44f5a750ff5cb0e9f5215cf3aaad7455261f3ff6..937e0572d4a725912bb79e35b3f051dd7ed1f04a 100644
+--- a/llvm/include/llvm/Support/Signals.h
++++ b/llvm/include/llvm/Support/Signals.h
+@@ -14,6 +14,7 @@
+ #ifndef LLVM_SUPPORT_SIGNALS_H
+ #define LLVM_SUPPORT_SIGNALS_H
+ 
++#include <cstdint>
+ #include <string>
+ 
+ namespace llvm {
