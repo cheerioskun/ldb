@@ -33,14 +33,19 @@ make setup
 make                     # builds the required LLVM tools, then the runtime
 ```
 
-Need Git, Python 3.10+, CMake 3.20+, Ninja, and a host C/C++ compiler. A full
+Need Git, Python 3.10+, CMake 3.20+, Ninja, and a host C/C++ compiler with its
+C++ development library (Ubuntu: `build-essential`). A full
 compiler build is substantial. `LDB_BUILD_JOBS=2` is the conservative default;
 raise it explicitly if the machine has sufficient memory. Only the X86 target
 is built, with one link job at a time.
 
 Setup initializes the upstream submodule, selects the LLVM/Clang/CMake source
-directories, applies our patches, and installs the project hooks. Re-running
+directories and upstream `third-party` dependencies, applies our patches, and
+installs the project hooks. Re-running
 it preserves local development edits. Build outputs stay under `build/llvm`.
+
+Pass additional CMake settings through `scripts/build-llvm.sh`, for example
+`CC=clang CXX=clang++ ./scripts/build-llvm.sh -DLLVM_USE_LINKER=lld`.
 
 Run the small example after building:
 

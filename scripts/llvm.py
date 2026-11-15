@@ -155,6 +155,10 @@ def setup():
     if git("cat-file", "-e", base + "^{commit}", sub=True, check=False).returncode:
         git("fetch", "--no-tags", "--depth=1", "--filter=blob:none", "origin", base, sub=True)
     head = out("rev-parse", "HEAD", sub=True)
+    # Source dependencies can change without changing the compiler pin/patches.
+    # Git preserves dirty files when expanding the selected directories.
+    paths = info.get("sparse_paths", ["llvm", "clang", "cmake"])
+    git("sparse-checkout", "set", "--cone", *paths, sub=True)
     path = state_path()
     previous = json.loads(path.read_text()) if path.exists() else None
     wanted = fingerprint(base, files)
@@ -175,8 +179,6 @@ def setup():
             raise Error("LLVM contains local commits not recorded as a prepared series. Preserve them on a local branch and export them before changing toolchains.")
     # Only a pristine baseline or a known, clean, generated checkout reaches here.
     git("checkout", "--detach", base, sub=True)
-    paths = info.get("sparse_paths", ["llvm", "clang", "cmake"])
-    git("sparse-checkout", "set", "--cone", *paths, sub=True)
     names = series(files)
     if names:
         proc = git(

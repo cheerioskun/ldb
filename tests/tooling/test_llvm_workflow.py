@@ -32,6 +32,8 @@ class LLVMWorkflow(unittest.TestCase):
         self.git(self.upstream, "init", "-b", "main")
         (self.upstream / "llvm").mkdir()
         (self.upstream / "llvm/example.c").write_text("int example = 0;\n")
+        (self.upstream / "cmake").mkdir()
+        (self.upstream / "cmake/example.cmake").write_text("# dependency\n")
         self.git(self.upstream, "add", ".")
         self.git(self.upstream, "commit", "-m", "Upstream fixture")
         self.base = self.git(self.upstream, "rev-parse", "HEAD").stdout.strip()
@@ -68,6 +70,17 @@ class LLVMWorkflow(unittest.TestCase):
         (self.sub / "llvm/example.c").write_text(f"int example = {value};\n")
         self.git(self.sub, "add", "llvm/example.c")
         self.git(self.sub, "commit", "-m", f"Change LLVM to {value}")
+
+    def test_setup_expands_sparse_paths_without_losing_development_edits(self):
+        source = self.sub / "llvm/example.c"
+        source.write_text("int unfinished_edit = 1;\n")
+        metadata = self.root / "toolchain.json"
+        info = json.loads(metadata.read_text())
+        info["sparse_paths"].append("cmake")
+        metadata.write_text(json.dumps(info))
+        self.tool("setup")
+        self.assertEqual(source.read_text(), "int unfinished_edit = 1;\n")
+        self.assertTrue((self.sub / "cmake/example.cmake").is_file())
 
     def parent_commit(self):
         return self.git(self.root, "commit", "-m", "Record LLVM change")

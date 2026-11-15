@@ -11,7 +11,7 @@ cmake -S "$project_root/third_party/llvm/llvm" -B "$project_root/build/llvm" -G 
     -DLLVM_BUILD_TESTS=OFF \
     -DLLVM_INCLUDE_EXAMPLES=OFF \
     -DLLVM_ENABLE_BINDINGS=OFF \
-    -DLLVM_PARALLEL_LINK_JOBS=1
+    -DLLVM_PARALLEL_LINK_JOBS=1 "$@"
 cmake --build "$project_root/build/llvm" \
     --parallel "${LDB_BUILD_JOBS:-2}" \
     --target clang opt llc FileCheck llvm-symbolizer
