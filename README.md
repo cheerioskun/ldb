@@ -4,8 +4,10 @@ Tail-latency debugger: a small LLVM backend patch, an application runtime, and
 offline analysis tools. LLVM is an upstream submodule; our compiler changes
 are ordinary patch files versioned alongside the runtime and tests.
 
-`main` initially reproduces the existing LLVM 14 implementation, including the
-`ARCH_GET_FS` support for older x86-64 CPUs. The LLVM 23 upgrade has not started.
+`llvm-14` is the tested LLVM 14 reference, including `ARCH_GET_FS` support for
+older x86-64 CPUs and two runtime fixes exposed by the behavior suite. `main`
+remains at the initial setup. Work stops here for review; no tests have been
+cherry-picked into `main`, and the LLVM 23 upgrade has not started.
 
 ## Layout
 
@@ -18,6 +20,7 @@ apps/, web/          original example/application recipes and dashboard
 scripts/             prepare, build, export, and verify commands
 .githooks/           automatic patch export and commit validation
 tests/tooling/       tests for repository preparation and hook behavior
+tests/behavior/      three compiler/runtime behavior contracts
 docs/                development workflow and baseline provenance
 ```
 
@@ -29,8 +32,10 @@ on macOS; the LDB runtime itself uses Linux facilities.
 ```sh
 git clone https://github.com/cheerioskun/ldb.git
 cd ldb
+git switch llvm-14
 make setup
 make                     # builds the required LLVM tools, then the runtime
+make test-behavior
 ```
 
 Need Git, Python 3.10+, CMake 3.20+, Ninja, and a host C/C++ compiler with its
@@ -94,20 +99,23 @@ toolchain updates.
 ```sh
 make test-tooling          # small real-Git fixtures; no LLVM download/build
 make check-patches         # replay staged patches in an isolated temporary index
+make test-behavior         # requires the built compiler/runtime; Linux x86-64
 ```
 
-CI runs these checks and reconstructs the compiler source from the public
-upstream pin. The three intended LDB behavior tests are **not implemented yet**;
-passing tooling checks does not establish compiler/runtime correctness.
+All three behavior contracts pass on the Emulab Linux x86-64 machine, including
+10 consecutive runs across fresh processes. The 11 Git workflow tests and patch
+reconstruction also pass. CI independently builds the compiler and runs the
+suite; its rebuild for the runtime fixes is pending at this milestone.
+See [the test guide](tests/README.md) and [baseline evidence](docs/llvm14-baseline.md).
 
 ## Branch sequence
 
-1. Bootstrap `main` with the existing LLVM 14 implementation (this state).
-2. Create `llvm-14` and establish the minimal LDB behavior suite there.
+1. Bootstrap `main` with the existing LLVM 14 implementation (done).
+2. Create `llvm-14` and establish the minimal LDB behavior suite there (done).
 3. Keep shared tests/tooling in commits separate from LLVM 14/runtime fixes.
 4. Cherry-pick the shared test commits into `main` and run them on its LLVM 14
    baseline before changing the toolchain.
 5. Upgrade only `main` to LLVM 23; run the same behavioral contracts there.
 
-This keeps `llvm-14` as a working reference and distinguishes inherited bugs
-from port regressions. [Initial behavior-test plan](tests/README.md).
+We are stopped after step 2 for collaborative review. This keeps `llvm-14` as a
+working reference and distinguishes inherited bugs from later port regressions.
