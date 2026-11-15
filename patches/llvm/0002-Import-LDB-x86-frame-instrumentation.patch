@@ -1,0 +1,366 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Inho Cho <inhocho@csail.mit.edu>
+Date: Sun, 15 Nov 2026 13:01:45 -0500
+Subject: [PATCH 2/2] Import LDB x86 frame instrumentation
+
+Extracted from inhocho89/llvm14-ldb, as preserved by
+cheerioskun/llvm14-ldb at 5ead9a59c0ce7b67ee5d4d0acbc646f582c0fada.
+Upstream baseline: 5f66e721ec1d099cf2370235ce122cf47c287308.
+---
+ llvm/lib/Target/X86/CMakeLists.txt       |   1 +
+ llvm/lib/Target/X86/X86.h                |   4 +
+ llvm/lib/Target/X86/X86FrameLowering.cpp |  84 ++++++++++++++-
+ llvm/lib/Target/X86/X86LatencyDebug.cpp  | 132 +++++++++++++++++++++++
+ llvm/lib/Target/X86/X86TargetMachine.cpp |   2 +
+ 5 files changed, 219 insertions(+), 4 deletions(-)
+ create mode 100644 llvm/lib/Target/X86/X86LatencyDebug.cpp
+
+diff --git a/llvm/lib/Target/X86/CMakeLists.txt b/llvm/lib/Target/X86/CMakeLists.txt
+index 5dc4920f582455b74da01750ce253751635e3edc..c637d8add6638c5da2fce904a96b713582785449 100644
+--- a/llvm/lib/Target/X86/CMakeLists.txt
++++ b/llvm/lib/Target/X86/CMakeLists.txt
+@@ -83,6 +83,7 @@ set(sources
+   X86VZeroUpper.cpp
+   X86WinEHState.cpp
+   X86InsertWait.cpp
++  X86LatencyDebug.cpp
+   )
+ 
+ add_llvm_target(X86CodeGen ${sources}
+diff --git a/llvm/lib/Target/X86/X86.h b/llvm/lib/Target/X86/X86.h
+index 10e1c5d6ed38edf2f4ea11bb9e805250a55dfa0e..6be6a891c4ba05fbb6d4b64f52498166acdc9a5f 100644
+--- a/llvm/lib/Target/X86/X86.h
++++ b/llvm/lib/Target/X86/X86.h
+@@ -154,6 +154,9 @@ FunctionPass *createX86LoadValueInjectionRetHardeningPass();
+ FunctionPass *createX86SpeculativeLoadHardeningPass();
+ FunctionPass *createX86SpeculativeExecutionSideEffectSuppression();
+ 
++// This function pass allocate / deallocate stack space for LDB
++FunctionPass *createX86LDBStack();
++
+ void initializeEvexToVexInstPassPass(PassRegistry &);
+ void initializeFixupBWInstPassPass(PassRegistry &);
+ void initializeFixupLEAPassPass(PassRegistry &);
+@@ -181,6 +184,7 @@ void initializeX86LowerAMXTypeLegacyPassPass(PassRegistry &);
+ void initializeX86PreAMXConfigPassPass(PassRegistry &);
+ void initializeX86LowerTileCopyPass(PassRegistry &);
+ void initializeX86LowerAMXIntrinsicsLegacyPassPass(PassRegistry &);
++void initializeX86LDBStackPass(PassRegistry &);
+ 
+ namespace X86AS {
+ enum : unsigned {
+diff --git a/llvm/lib/Target/X86/X86FrameLowering.cpp b/llvm/lib/Target/X86/X86FrameLowering.cpp
+index 0971a0e33f98b21334b727368520f16d9510ee7d..f15c6d7aff4a1e60ab389788ae63a2fc37037346 100644
+--- a/llvm/lib/Target/X86/X86FrameLowering.cpp
++++ b/llvm/lib/Target/X86/X86FrameLowering.cpp
+@@ -42,10 +42,11 @@ STATISTIC(NumFrameExtraProbe,
+ 
+ using namespace llvm;
+ 
++// LDB: LAO modified
+ X86FrameLowering::X86FrameLowering(const X86Subtarget &STI,
+                                    MaybeAlign StackAlignOverride)
+     : TargetFrameLowering(StackGrowsDown, StackAlignOverride.valueOrOne(),
+-                          STI.is64Bit() ? -8 : -4),
++                          STI.is64Bit() ? -24 : -12),
+       STI(STI), TII(*STI.getInstrInfo()), TRI(STI.getRegisterInfo()) {
+   // Cache a bunch of frame-related predicates for this subtarget.
+   SlotSize = TRI->getSlotSize();
+@@ -1551,6 +1552,11 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
+     if (TRI->hasStackRealignment(MF) && !IsWin64Prologue)
+       NumBytes = alignTo(NumBytes, MaxAlign);
+ 
++    // LDB: Reserve stack space
++    BuildMI(MBB, MBBI, DL, TII.get(X86::SUB64ri8), X86::RSP)
++	    .addUse(X86::RSP)
++	    .addImm(16);
++
+     // Save EBP/RBP into the appropriate stack slot.
+     BuildMI(MBB, MBBI, DL, TII.get(Is64Bit ? X86::PUSH64r : X86::PUSH32r))
+       .addReg(MachineFramePtr, RegState::Kill)
+@@ -1560,13 +1566,15 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
+       // Mark the place where EBP/RBP was saved.
+       // Define the current CFA rule to use the provided offset.
+       assert(StackSize);
++      // LDB: 2 more stackGrowth
+       BuildCFI(MBB, MBBI, DL,
+-               MCCFIInstruction::cfiDefCfaOffset(nullptr, -2 * stackGrowth));
++               MCCFIInstruction::cfiDefCfaOffset(nullptr, -4 * stackGrowth));
+ 
+       // Change the rule for the FramePtr to be an "offset" rule.
+       unsigned DwarfFramePtr = TRI->getDwarfRegNum(MachineFramePtr, true);
++      // LDB: 2 more stackGrowth
+       BuildCFI(MBB, MBBI, DL, MCCFIInstruction::createOffset(
+-                                  nullptr, DwarfFramePtr, 2 * stackGrowth));
++                                  nullptr, DwarfFramePtr, 4 * stackGrowth));
+     }
+ 
+     if (NeedsWinCFI) {
+@@ -1646,6 +1654,7 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
+         }
+       }
+     }
++
+   } else {
+     assert(!IsFunclet && "funclets without FPs not yet implemented");
+     NumBytes = StackSize -
+@@ -1661,6 +1670,53 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
+       MFI.setOffsetAdjustment(-StackSize);
+   }
+ 
++  // LDB: Custom sequence in prologue (update ngen and rbp)
++  // 1. Copy generation number
++  // movq %fs:-344, %r11
++  BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64rm))
++    .addReg(X86::R11)
++    .addReg(0).addImm(1)
++    .addReg(0).addImm(-344)
++    .addReg(X86::FS);
++
++  // 2. Increment __ldb_ngen
++  // incq %fs:-344
++  BuildMI(MBB, MBBI, DL, TII.get(X86::INC64m))
++    .addReg(0).addImm(1)
++    .addReg(0).addImm(-344)
++    .addReg(X86::FS);
++
++  // 3. Put generation number into stack
++  // movq %r11, 16(%rbp)
++  BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64mr))
++    .addReg(X86::RBP).addImm(1)
++    .addReg(0).addImm(16)
++    .addReg(0)
++    .addReg(X86::R11);
++
++  // 4.LDB: Install canary
++  // movq %fs:-216, %r11
++  BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64rm))
++    .addReg(X86::R11)
++    .addReg(0).addImm(1)
++    .addReg(0).addImm(-216)
++    .addReg(X86::FS);
++
++  // movq %r11, 8(%rbp)
++  BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64mr))
++    .addReg(X86::RBP).addImm(1)
++    .addReg(0).addImm(8)
++    .addReg(0)
++    .addReg(X86::R11);
++
++  // 4. update __ldb_rbp
++  // movq %rbp, %fs:-280
++  BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64mr))
++    .addReg(0).addImm(1)
++    .addReg(0).addImm(-280)
++    .addReg(X86::FS)
++    .addReg(X86::RBP);
++
+   // For EH funclets, only allocate enough space for outgoing calls. Save the
+   // NumBytes value that we would've used for the parent frame.
+   unsigned ParentFrameNumBytes = NumBytes;
+@@ -1669,7 +1725,8 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
+ 
+   // Skip the callee-saved push instructions.
+   bool PushedRegs = false;
+-  int StackOffset = 2 * stackGrowth;
++  // LDB: 2 more stackGrowth
++  int StackOffset = 4 * stackGrowth;
+ 
+   while (MBBI != MBB.end() &&
+          MBBI->getFlag(MachineInstr::FrameSetup) &&
+@@ -2129,11 +2186,29 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
+       int Offset = 16 + mergeSPUpdates(MBB, MBBI, true);
+       emitSPUpdate(MBB, MBBI, DL, Offset, /*InEpilogue*/true);
+     }
++
+     // Pop EBP.
+     BuildMI(MBB, MBBI, DL, TII.get(Is64Bit ? X86::POP64r : X86::POP32r),
+             MachineFramePtr)
+         .setMIFlag(MachineInstr::FrameDestroy);
+ 
++    // LDB: custom sequence in epilogue
++    // 2. Destroy reserved space
++    // add $rsp, 16
++    BuildMI(MBB, MBBI, DL, TII.get(X86::ADD64ri8), X86::RSP)
++	    .addUse(X86::RSP)
++	    .addImm(16);
++    --MBBI;
++
++    // 1. Update rbp
++    // movq %rbp, %fs:-280
++    BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64mr))
++      .addReg(0).addImm(1)
++      .addReg(0).addImm(-280)
++      .addReg(X86::FS)
++      .addReg(X86::RBP);
++    --MBBI;
++
+     // We need to reset FP to its untagged state on return. Bit 60 is currently
+     // used to show the presence of an extended frame.
+     if (X86FI->hasSwiftAsyncContext()) {
+@@ -2160,6 +2235,7 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
+     }
+   }
+ 
++
+   MachineBasicBlock::iterator FirstCSPop = MBBI;
+   // Skip the callee-saved pop instructions.
+   while (MBBI != MBB.begin()) {
+diff --git a/llvm/lib/Target/X86/X86LatencyDebug.cpp b/llvm/lib/Target/X86/X86LatencyDebug.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..b0aa5d7d8eea0461fc1a22bbf713c44a9229e6a9
+--- /dev/null
++++ b/llvm/lib/Target/X86/X86LatencyDebug.cpp
+@@ -0,0 +1,132 @@
++#include "X86.h"
++#include "X86InstrInfo.h"
++#include "X86Subtarget.h"
++#include "X86TargetMachine.h"
++#include "X86MachineFunctionInfo.h"
++#include "llvm/CodeGen/MachineFunctionPass.h"
++#include "llvm/CodeGen/MachineFrameInfo.h"
++#include "llvm/CodeGen/MachineInstrBuilder.h"
++#include "llvm/Support/raw_ostream.h"
++#include "llvm/MC/MCContext.h"
++
++using namespace llvm;
++
++#define X86_LDB_STACK_PASS_NAME "X86 Latency Debugger Stack Pass"
++#define LDB_STACK_SIZE 16
++
++namespace {
++class X86LDBStack : public MachineFunctionPass {
++public:
++  static char ID;
++  const X86Subtarget *STI = nullptr;
++  const X86InstrInfo *TII = nullptr;
++  const X86RegisterInfo *TRI = nullptr;
++
++  X86LDBStack() : MachineFunctionPass(ID) {
++    initializeX86LDBStackPass(*PassRegistry::getPassRegistry());
++  }
++
++  bool hasFP(const MachineFunction &MF) const;
++  bool runOnMachineFunction(MachineFunction &MF) override;
++
++  StringRef getPassName() const override { return X86_LDB_STACK_PASS_NAME; }
++};
++
++char X86LDBStack::ID = 0;
++
++bool X86LDBStack::hasFP(const MachineFunction &MF) const {
++  const MachineFrameInfo &MFI = MF.getFrameInfo();
++  return (MF.getTarget().Options.DisableFramePointerElim(MF) ||
++          TRI->hasStackRealignment(MF) || MFI.hasVarSizedObjects() ||
++          MFI.isFrameAddressTaken() || MFI.hasOpaqueSPAdjustment() ||
++          MF.getInfo<X86MachineFunctionInfo>()->getForceFramePointer() ||
++          MF.getInfo<X86MachineFunctionInfo>()->hasPreallocatedCall() ||
++          MF.callsUnwindInit() || MF.hasEHFunclets() || MF.callsEHReturn() ||
++          MFI.hasStackMap() || MFI.hasPatchPoint());
++}
++
++bool X86LDBStack::runOnMachineFunction(MachineFunction &MF) {
++  STI = &static_cast<const X86Subtarget &>(MF.getSubtarget());
++  TII = STI->getInstrInfo();
++  TRI = STI->getRegisterInfo();
++  MachineFrameInfo &MFI = MF.getFrameInfo();
++  MachineRegisterInfo &MRI = MF.getRegInfo();
++
++  return false;
++
++  if (!hasFP(MF)) {
++    return false;
++  }
++
++  MachineBasicBlock* bb0 = &MF.front();
++  MachineBasicBlock* bb1 = MF.CreateMachineBasicBlock();
++
++  MF.push_front(bb1);
++  bb1->addSuccessor(bb0);
++
++  // Get a virtual register for memcpy
++  Register RegTmp1 = MRI.createVirtualRegister(&X86::GR64RegClass);
++  Register RegTmp2 = MRI.createVirtualRegister(&X86::GR64RegClass);
++
++  // incq %fs:__ldb_ngen@TPOFF
++  BuildMI(*bb1, bb1->end(), DebugLoc(), TII->get(X86::INC64m))
++    .addReg(0).addImm(1)
++    .addReg(0).addSym(MF.getContext().getOrCreateSymbol("__ldb_ngen@TPOFF"))
++    .addReg(X86::FS);
++
++  // movq %fs:__ldb_ngen@TPOFF, %rx1
++  BuildMI(*bb1, bb1->end(), DebugLoc(), TII->get(X86::MOV64rm))
++    .addDef(RegTmp1)
++    .addReg(0).addImm(1)
++    .addReg(0).addSym(MF.getContext().getOrCreateSymbol("__ldb_ngen@TPOFF"))
++    .addReg(X86::FS);
++
++  // movq %rx1, 16(%rbp)
++  BuildMI(*bb1, bb1->end(), DebugLoc(), TII->get(X86::MOV64mr))
++    .addReg(X86::RBP).addImm(1)
++    .addReg(0).addImm(16)
++    .addReg(0).addDef(RegTmp1);
++
++  /// update ldb_rbp
++  // movq %rbp, %fs:__ldb_rbp@TPOFF
++  BuildMI(*bb1, bb1->end(), DebugLoc(), TII->get(X86::MOV64mr))
++    .addReg(0).addImm(1)
++    .addReg(0).addSym(MF.getContext().getOrCreateSymbol("__ldb_rbp@TPOFF"))
++    .addReg(X86::FS)
++    .addReg(X86::RBP);
++
++  for (MachineBasicBlock &bb : MF) {
++    MachineBasicBlock::iterator i, ie;
++
++    for (i = bb.begin(), ie = bb.end(); i != ie; ++i) {
++      MachineInstr *mi = &(*i);
++
++      if (mi->isReturn()) {
++        // movq (%rbp), %rx2
++        BuildMI(bb, i, DebugLoc(), TII->get(X86::MOV64rm))
++          .addDef(RegTmp2)
++	  .addReg(X86::RBP).addImm(1)
++	  .addReg(0).addImm(0)
++	  .addReg(0);
++
++	// movq %rx2, %fs:__ldb_rbp@TPOFF
++	BuildMI(bb, i, DebugLoc(), TII->get(X86::MOV64mr))
++          .addReg(0).addImm(1)
++	  .addReg(0).addSym(MF.getContext().getOrCreateSymbol("__ldb_rbp@TPOFF"))
++	  .addReg(X86::FS)
++	  .addDef(RegTmp2);
++      }
++    }
++  }
++
++  return true;
++}
++
++} // namespace
++
++INITIALIZE_PASS(X86LDBStack, "x86-ldb-stack",
++    X86_LDB_STACK_PASS_NAME, false, false)
++
++namespace llvm {
++FunctionPass *createX86LDBStack() { return new X86LDBStack(); }
++}
+diff --git a/llvm/lib/Target/X86/X86TargetMachine.cpp b/llvm/lib/Target/X86/X86TargetMachine.cpp
+index e3d0128dd73dad9d2f416c8e85ea0224e43cb7e3..0187407a91b4838d81f038464ca33987f168225c 100644
+--- a/llvm/lib/Target/X86/X86TargetMachine.cpp
++++ b/llvm/lib/Target/X86/X86TargetMachine.cpp
+@@ -90,6 +90,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeX86Target() {
+   initializeX86OptimizeLEAPassPass(PR);
+   initializeX86PartialReductionPass(PR);
+   initializePseudoProbeInserterPass(PR);
++  initializeX86LDBStackPass(PR);
+ }
+ 
+ static std::unique_ptr<TargetLoweringObjectFile> createTLOF(const Triple &TT) {
+@@ -508,6 +509,7 @@ void X86PassConfig::addPreRegAlloc() {
+   if (getOptLevel() != CodeGenOpt::None) {
+     addPass(createX86PreTileConfigPass());
+   }
++  addPass(createX86LDBStack());
+ }
+ 
+ void X86PassConfig::addMachineSSAOptimization() {

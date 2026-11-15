@@ -1,0 +1,7 @@
+{
+  "llvm_major": 14,
+  "upstream_revision": "5f66e721ec1d099cf2370235ce122cf47c287308",
+  "sparse_paths": ["llvm", "clang", "cmake"],
+  "ldb_source": "https://github.com/cheerioskun/llvm14-ldb",
+  "ldb_revision": "5ead9a59c0ce7b67ee5d4d0acbc646f582c0fada"
+}

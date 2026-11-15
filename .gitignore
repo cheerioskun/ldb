@@ -1,0 +1,13 @@
+/build/
+/.venv/
+__pycache__/
+*.pyc
+.DS_Store
+/runtime/*.o
+/runtime/*.a
+/runtime/*.so
+/apps/**/ldb.data*
+/apps/**/maps.data
+/apps/demo/demo
+/apps/demo/snapshot.txt
+/apps/helloworld/hello

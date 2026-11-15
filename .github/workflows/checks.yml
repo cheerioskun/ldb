@@ -1,0 +1,30 @@
+name: Repository checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tooling:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Exercise setup and commit hooks
+        run: make test-tooling
+
+  compiler-patches:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Reconstruct pinned LLVM source
+        run: make setup
+      - name: Verify patch application independently
+        run: make check-patches
+      - name: Check patch export round-trip
+        run: |
+          python3 scripts/llvm.py hook
+          git diff --exit-code -- patches/llvm
+          git diff --cached --exit-code -- patches/llvm third_party/llvm

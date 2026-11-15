@@ -1,0 +1,323 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Inho Cho <inhocho@csail.mit.edu>
+Date: Sun, 15 Nov 2026 13:01:45 -0500
+Subject: [PATCH 1/2] Import LDB TLS and lifecycle IR pass
+
+Extracted from inhocho89/llvm14-ldb, as preserved by
+cheerioskun/llvm14-ldb at 5ead9a59c0ce7b67ee5d4d0acbc646f582c0fada.
+Upstream baseline: 5f66e721ec1d099cf2370235ce122cf47c287308.
+---
+ llvm/include/llvm/InitializePasses.h          |   1 +
+ llvm/include/llvm/Transforms/Scalar.h         |   3 +
+ llvm/include/llvm/Transforms/Utils/LDB.h      |  18 +++
+ .../llvm/Transforms/Utils/ModuleUtils.h       |   5 +
+ llvm/lib/Passes/PassBuilder.cpp               |   1 +
+ llvm/lib/Passes/PassBuilderPipelines.cpp      |   3 +
+ llvm/lib/Passes/PassRegistry.def              |   1 +
+ .../lib/Transforms/IPO/PassManagerBuilder.cpp |   3 +
+ llvm/lib/Transforms/Utils/CMakeLists.txt      |   1 +
+ llvm/lib/Transforms/Utils/LDB.cpp             | 131 ++++++++++++++++++
+ llvm/lib/Transforms/Utils/Utils.cpp           |   1 +
+ .../llvm/lib/Transforms/Utils/BUILD.gn        |   1 +
+ 12 files changed, 169 insertions(+)
+ create mode 100644 llvm/include/llvm/Transforms/Utils/LDB.h
+ create mode 100644 llvm/lib/Transforms/Utils/LDB.cpp
+
+diff --git a/llvm/include/llvm/InitializePasses.h b/llvm/include/llvm/InitializePasses.h
+index 489ef045796f0935d90402aeca3bd79c0689e655..14eb221511677f3adb0a1cb994346116c7e1f23e 100644
+--- a/llvm/include/llvm/InitializePasses.h
++++ b/llvm/include/llvm/InitializePasses.h
+@@ -463,6 +463,7 @@ void initializeWinEHPreparePass(PassRegistry&);
+ void initializeWriteBitcodePassPass(PassRegistry&);
+ void initializeWriteThinLTOBitcodePass(PassRegistry&);
+ void initializeXRayInstrumentationPass(PassRegistry&);
++void initializeLDBTLSLegacyPassPass(PassRegistry&);
+ 
+ } // end namespace llvm
+ 
+diff --git a/llvm/include/llvm/Transforms/Scalar.h b/llvm/include/llvm/Transforms/Scalar.h
+index 4d6874f784efbfc9c8523e2e298c4afb2d09f256..115a0f209e4620972dd1e75ff06ddd44c9d0ea55 100644
+--- a/llvm/include/llvm/Transforms/Scalar.h
++++ b/llvm/include/llvm/Transforms/Scalar.h
+@@ -563,6 +563,9 @@ FunctionPass *createInstSimplifyLegacyPass();
+ // and scatter intrinsics with scalar code when target doesn't support them.
+ //
+ FunctionPass *createScalarizeMaskedMemIntrinLegacyPass();
++
++// LDB - insert thread-local global variables for LDB
++ModulePass *createLDBTLSPass();
+ } // End llvm namespace
+ 
+ #endif
+diff --git a/llvm/include/llvm/Transforms/Utils/LDB.h b/llvm/include/llvm/Transforms/Utils/LDB.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..8a61ea8453c3fa81af02d376b4b80f5fadd9555e
+--- /dev/null
++++ b/llvm/include/llvm/Transforms/Utils/LDB.h
+@@ -0,0 +1,18 @@
++//===-- LDB.h - Passes related to Latency Debugger --------*- C++ -*-===//
++
++#ifndef LLVM_TRANSFORMS_UTILS_LDB_H
++#define LLVM_TRANSFORMS_UTILS_LDB_H
++
++#include "llvm/IR/Module.h"
++#include "llvm/IR/PassManager.h"
++
++namespace llvm {
++class LDBTLSPass : public PassInfoMixin<LDBTLSPass> {
++public:
++  LDBTLSPass() = default;
++
++  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
++};
++} // namespace llvm
++
++#endif // LLVM_TRANSFORMS_UTILS_LDB_H
+diff --git a/llvm/include/llvm/Transforms/Utils/ModuleUtils.h b/llvm/include/llvm/Transforms/Utils/ModuleUtils.h
+index 8d459972336ba93dcef7074d0712618359dfd626..3fde9460876ca40aa911423cd7beaffc9e02b632 100644
+--- a/llvm/include/llvm/Transforms/Utils/ModuleUtils.h
++++ b/llvm/include/llvm/Transforms/Utils/ModuleUtils.h
+@@ -118,6 +118,11 @@ namespace VFABI {
+ void setVectorVariantNames(CallInst *CI,
+                            const SmallVector<std::string, 8> &VariantMappings);
+ } // End VFABI namespace
++
++// LDB
++// declare thread-local global variables for LDB
++bool insertLDBGlobals(Module &M);
++
+ } // End llvm namespace
+ 
+ #endif // LLVM_TRANSFORMS_UTILS_MODULEUTILS_H
+diff --git a/llvm/lib/Passes/PassBuilder.cpp b/llvm/lib/Passes/PassBuilder.cpp
+index dedfc81f11bbaaaf6c740c310de80d3be090f8d6..8aeb2ff6b1d7a872db9d3464129787398d71b6f3 100644
+--- a/llvm/lib/Passes/PassBuilder.cpp
++++ b/llvm/lib/Passes/PassBuilder.cpp
+@@ -226,6 +226,7 @@
+ #include "llvm/Transforms/Utils/InjectTLIMappings.h"
+ #include "llvm/Transforms/Utils/InstructionNamer.h"
+ #include "llvm/Transforms/Utils/LCSSA.h"
++#include "llvm/Transforms/Utils/LDB.h"
+ #include "llvm/Transforms/Utils/LibCallsShrinkWrap.h"
+ #include "llvm/Transforms/Utils/LoopSimplify.h"
+ #include "llvm/Transforms/Utils/LoopVersioning.h"
+diff --git a/llvm/lib/Passes/PassBuilderPipelines.cpp b/llvm/lib/Passes/PassBuilderPipelines.cpp
+index e838665eb9ce9467b9c1210ce9168a005d7fd409..5d0c477488d531fe542389874d7722ab1f529b12 100644
+--- a/llvm/lib/Passes/PassBuilderPipelines.cpp
++++ b/llvm/lib/Passes/PassBuilderPipelines.cpp
+@@ -118,6 +118,7 @@
+ #include "llvm/Transforms/Utils/AssumeBundleBuilder.h"
+ #include "llvm/Transforms/Utils/CanonicalizeAliases.h"
+ #include "llvm/Transforms/Utils/InjectTLIMappings.h"
++#include "llvm/Transforms/Utils/LDB.h"
+ #include "llvm/Transforms/Utils/LibCallsShrinkWrap.h"
+ #include "llvm/Transforms/Utils/Mem2Reg.h"
+ #include "llvm/Transforms/Utils/NameAnonGlobals.h"
+@@ -1316,6 +1317,8 @@ PassBuilder::buildPerModuleDefaultPipeline(OptimizationLevel Level,
+   if (LTOPreLink)
+     addRequiredLTOPreLinkPasses(MPM);
+ 
++  MPM.addPass(LDBTLSPass());
++
+   return MPM;
+ }
+ 
+diff --git a/llvm/lib/Passes/PassRegistry.def b/llvm/lib/Passes/PassRegistry.def
+index 69d8d8c432675d99a93189c3e8d605a5ed6cb15e..b6539268ab6b723228f1da58350ea8bf4c59f063 100644
+--- a/llvm/lib/Passes/PassRegistry.def
++++ b/llvm/lib/Passes/PassRegistry.def
+@@ -119,6 +119,7 @@ MODULE_PASS("sancov-module", ModuleSanitizerCoveragePass())
+ MODULE_PASS("memprof-module", ModuleMemProfilerPass())
+ MODULE_PASS("poison-checking", PoisonCheckingPass())
+ MODULE_PASS("pseudo-probe-update", PseudoProbeUpdatePass())
++MODULE_PASS("ldb-tls-globals", LDBTLSPass())
+ #undef MODULE_PASS
+ 
+ #ifndef MODULE_PASS_WITH_PARAMS
+diff --git a/llvm/lib/Transforms/IPO/PassManagerBuilder.cpp b/llvm/lib/Transforms/IPO/PassManagerBuilder.cpp
+index 6e5aeb9c41f6ffe224f7eb32adadde8df0c6be15..a5743aaf98e7d0d3385ed56e5a74b4f3fc9510a6 100644
+--- a/llvm/lib/Transforms/IPO/PassManagerBuilder.cpp
++++ b/llvm/lib/Transforms/IPO/PassManagerBuilder.cpp
+@@ -681,6 +681,9 @@ void PassManagerBuilder::populateModulePassManager(
+ 
+   MPM.add(createAnnotation2MetadataLegacyPass());
+ 
++  // LDB thread-local globals
++  MPM.add(createLDBTLSPass());
++
+   if (!PGOSampleUse.empty()) {
+     MPM.add(createPruneEHPass());
+     // In ThinLTO mode, when flattened profile is used, all the available
+diff --git a/llvm/lib/Transforms/Utils/CMakeLists.txt b/llvm/lib/Transforms/Utils/CMakeLists.txt
+index aa14ba9eefe7902d8222e6934208fa6be8837e35..ae1a0a984e242d931d89a19e850be76d5ffca185 100644
+--- a/llvm/lib/Transforms/Utils/CMakeLists.txt
++++ b/llvm/lib/Transforms/Utils/CMakeLists.txt
+@@ -34,6 +34,7 @@ add_llvm_component_library(LLVMTransformUtils
+   InstructionNamer.cpp
+   IntegerDivision.cpp
+   LCSSA.cpp
++  LDB.cpp
+   LibCallsShrinkWrap.cpp
+   Local.cpp
+   LoopPeel.cpp
+diff --git a/llvm/lib/Transforms/Utils/LDB.cpp b/llvm/lib/Transforms/Utils/LDB.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..fec31b79ab72edc9ba5ca62661da7cb29b5ae83c
+--- /dev/null
++++ b/llvm/lib/Transforms/Utils/LDB.cpp
+@@ -0,0 +1,131 @@
++//===- LDB.cpp - LDB Support: Declare required global variables --------===//
++
++#include "llvm/Transforms/Utils/LDB.h"
++#include "llvm/ADT/SmallString.h"
++#include "llvm/IR/Module.h"
++#include "llvm/IR/Instructions.h"
++#include "llvm/InitializePasses.h"
++#include "llvm/Pass.h"
++#include "llvm/Support/MD5.h"
++#include "llvm/Transforms/Utils/ModuleUtils.h"
++
++using namespace llvm;
++
++// Declare thread-local global variable for LDB
++bool llvm::insertLDBGlobals(Module &M) {
++  if (!M.getFunction("main"))
++    return false;
++
++  // allocate tls (400 bytes = 8 bytes * 50)
++  // for safety let's reserve 25 byte
++
++  // offset           contents
++  // -400       [padding]
++  // -352       [padding]
++  // -344       [generation number (8 bytes)]
++  // -336       [padding]
++  //  ...       [padding]
++  // -288       [padding]
++  // -280       [most recent RBP (8 bytes)]
++  // -272       [padding]
++  //  ...       [padding]
++  // -224       [padding]
++  // -216       [canary (8 bytes)]
++  // -208       [thread local index (8 bytes)]
++  // -200       [Reserved for safety]
++  //  ...       [Reserved for safety]
++  //   -8       [Reserved for safety]
++
++  Type *ArrTy = ArrayType::get(Type::getInt64Ty(M.getContext()), 50);
++  M.getOrInsertGlobal("__ldb_reserved", ArrTy, [&] {
++    GlobalVariable *g =
++      new GlobalVariable(M, ArrTy, false, GlobalVariable::ExternalLinkage,
++       nullptr, "__ldb_reserved", nullptr,
++       GlobalVariable::GeneralDynamicTLSModel);
++      g->setInitializer(Constant::getNullValue(ArrTy));
++      g->setDSOLocal(true);
++      g->setAlignment(llvm::Align(8));
++      return g;
++  });
++
++  // Instrument main function
++  // setup hooks
++  auto &Context = M.getContext();
++  Type* voidTy = Type::getVoidTy(Context);
++  FunctionType* funcTy = FunctionType::get(voidTy, false);
++  Function::Create(funcTy, llvm::GlobalVariable::ExternalLinkage)->setName("__ldbInit");
++  Function::Create(funcTy, llvm::GlobalVariable::ExternalLinkage)->setName("__ldbExit");
++
++  // Loop through all of the functions in the module
++  Module::FunctionListType &functions = M.getFunctionList();
++  for(Module::FunctionListType::iterator FI = functions.begin(), FE = functions.end();
++      FI != FE; ++FI) {
++    // Ignore the instrumented function
++    if (FI->getName() == "__ldbInit" || FI->getName() == "__ldbExit")
++      continue;
++
++    // Instrument main function
++    if (FI->getName() == "main") {
++      FunctionCallee hook_init = M.getOrInsertFunction("__ldbInit", funcTy);
++      FunctionCallee hook_exit = M.getOrInsertFunction("__ldbExit", funcTy);
++
++      // instrument init function
++      BasicBlock *BB = &(*FI).front();
++      Instruction *I = &BB->front();
++
++      CallInst::Create(hook_init)->insertBefore(I);
++
++      // instrument exit function
++      for (BasicBlock &bb : *FI) {
++        for (Instruction &i : bb) {
++          if (i.getOpcode() == Instruction::Ret) {
++            CallInst::Create(hook_exit)->insertBefore(&i);
++          }
++        }
++      }
++
++    }
++  }
++
++  return true;
++}
++
++namespace {
++// Legacy pass with -enable-new-pm=0
++class LDBTLSLegacyPass : public ModulePass {
++public:
++  // Pass identification
++  static char ID;
++
++  // for debug output
++  StringRef getPassName() const override {return "LDB TLS"; }
++
++  explicit LDBTLSLegacyPass() : ModulePass(ID) {}
++
++  bool runOnModule(Module &M) override {return insertLDBGlobals(M); }
++};
++char LDBTLSLegacyPass::ID = 0;
++
++} // anonymous namespace
++
++// This is for new PassManager for clang/clang++
++PreservedAnalyses LDBTLSPass::run(Module &M,
++				  ModuleAnalysisManager &AM) {
++  if (!insertLDBGlobals(M))
++    return PreservedAnalyses::all();
++
++  return PreservedAnalyses::none();
++}
++
++INITIALIZE_PASS_BEGIN(LDBTLSLegacyPass, "ldb-tls-globals",
++		      "insert thread-local global variables for LDB",
++		      false, false)
++INITIALIZE_PASS_END(LDBTLSLegacyPass, "ldb-tls-globals",
++		    "insert thread-local global variables for LDB",
++		    false, false)
++
++namespace llvm {
++ModulePass *createLDBTLSPass() {
++  return new LDBTLSLegacyPass();
++}
++}
+diff --git a/llvm/lib/Transforms/Utils/Utils.cpp b/llvm/lib/Transforms/Utils/Utils.cpp
+index 43eb5c87aceedd8bdc0aff9d2520a96cacb169e1..ef41a5e2a0ab74524c46ee6d7d8ff919d63ff4bb 100644
+--- a/llvm/lib/Transforms/Utils/Utils.cpp
++++ b/llvm/lib/Transforms/Utils/Utils.cpp
+@@ -46,6 +46,7 @@ void llvm::initializeTransformUtils(PassRegistry &Registry) {
+   initializeInjectTLIMappingsLegacyPass(Registry);
+   initializeFixIrreduciblePass(Registry);
+   initializeUnifyLoopExitsLegacyPassPass(Registry);
++  initializeLDBTLSLegacyPassPass(Registry);
+ }
+ 
+ /// LLVMInitializeTransformUtils - C binding for initializeTransformUtilsPasses.
+diff --git a/llvm/utils/gn/secondary/llvm/lib/Transforms/Utils/BUILD.gn b/llvm/utils/gn/secondary/llvm/lib/Transforms/Utils/BUILD.gn
+index 579e8575764ca2698e3158f2a0990d0974ebd97a..527559905d9ed12780a3a073ebb39010f76fa0b2 100644
+--- a/llvm/utils/gn/secondary/llvm/lib/Transforms/Utils/BUILD.gn
++++ b/llvm/utils/gn/secondary/llvm/lib/Transforms/Utils/BUILD.gn
+@@ -41,6 +41,7 @@ static_library("Utils") {
+     "InstructionNamer.cpp",
+     "IntegerDivision.cpp",
+     "LCSSA.cpp",
++    "LDB.cpp",
+     "LibCallsShrinkWrap.cpp",
+     "Local.cpp",
+     "LoopPeel.cpp",
